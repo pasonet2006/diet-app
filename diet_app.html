@@ -544,7 +544,7 @@ async function analyzePhoto() {
     $('rC').textContent     = analysis.carbs + 'g';
     $('anaResult').style.display = 'block';
     $('anaBtn').style.display    = 'none';
-  } catch(e) { toast('エラー: '+e.message); }
+  } catch(e) { alert('エラー詳細:\n'+e.message); }
   finally { hideLoad(); }
 }
 
