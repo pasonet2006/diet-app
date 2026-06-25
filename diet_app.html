@@ -156,11 +156,11 @@ canvas{width:100%;border-radius:8px;display:block}
     <div class="app-sub">写真を撮るだけでカロリー計算</div>
     <div style="width:100%">
       <div class="fg">
-        <label>Anthropic API キー</label>
-        <input type="text" id="akIn" placeholder="sk-ant-..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" oninput="akBuf=this.value;onAkInput(this.value)" onblur="onAkBlur()">
+        <label>Google Gemini API キー</label>
+        <input type="text" id="akIn" placeholder="AIza..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" oninput="akBuf=this.value;onAkInput(this.value)" onblur="onAkBlur()">
       </div>
-      <div id="akHint" style="font-size:14px;color:#6366F1;font-weight:600;text-align:center;margin-bottom:12px;min-height:22px"></div>
-      <p style="font-size:13px;color:#94A3B8;text-align:center;margin-bottom:8px">APIキーを貼り付けたらキーボードを閉じてください</p>
+      <button class="btn btn-p" onclick="saveApiKey()" style="margin-bottom:12px">スタート</button>
+      <div id="akHint" style="font-size:14px;color:#6366F1;font-weight:600;text-align:center;margin-bottom:8px;min-height:22px"></div>
     </div>
     <p style="margin-top:10px;font-size:12px;color:#94A3B8;text-align:center">APIキーは端末内のみに保存されます</p>
   </div>
@@ -325,7 +325,7 @@ canvas{width:100%;border-radius:8px;display:block}
 
       <div class="card" style="margin-bottom:24px">
         <div class="ct">APIキー設定</div>
-        <div class="fg"><label>Anthropic APIキー</label><input type="password" id="akEdit" placeholder="sk-ant-..."></div>
+        <div class="fg"><label>Google Gemini APIキー</label><input type="password" id="akEdit" placeholder="AIza..."></div>
         <button class="btn btn-p" onclick="updateKey()">APIキーを更新</button>
       </div>
     </div>
@@ -535,7 +535,7 @@ async function analyzePhoto() {
   if (!photoB64) { toast('写真を選択してください'); return; }
   showLoad('AIが解析中...');
   try {
-    analysis = await claudeVision(photoB64, photoMime);
+    analysis = await geminiVision(photoB64, photoMime);
     $('rName').textContent  = analysis.name;
     $('rDesc').textContent  = analysis.description || '';
     $('rKcal').textContent  = analysis.calories;
@@ -689,7 +689,7 @@ function saveGoal() {
 
 function updateKey() {
   const k=$('akEdit').value.trim();
-  if(!k.startsWith('sk-')){toast('有効なAPIキーを入力してください');return;}
+  if(k.length<20){toast('有効なAPIキーを入力してください');return;}
   setStr(K.api,k); toast('APIキーを更新しました！');
 }
 
@@ -698,7 +698,7 @@ async function getAdvice() {
   if(!todayMeals().length){toast('まず食事を記録してください');return;}
   showLoad('アドバイス生成中...');
   try {
-    const txt = await claudeAdvice();
+    const txt = await geminiAdvice();
     $('adviceTxt').textContent=txt;
     $('adviceWrap').style.display='block';
     $('adviceWrap').scrollIntoView({behavior:'smooth'});
@@ -706,31 +706,22 @@ async function getAdvice() {
   finally { hideLoad(); }
 }
 
-// ── Claude API ──
-function apiHeaders() {
-  return {
-    'Content-Type':'application/json',
-    'x-api-key': getStr(K.api),
-    'anthropic-version':'2023-06-01',
-    'anthropic-dangerous-direct-browser-access':'true'
-  };
-}
-
-async function claudeVision(b64, mime) {
-  const res = await fetch('https://api.anthropic.com/v1/messages',{
-    method:'POST', headers:apiHeaders(),
+// ── Gemini API ──
+async function geminiVision(b64, mime) {
+  const key = getStr(K.api);
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      model:'claude-sonnet-4-6', max_tokens:512,
-      messages:[{role:'user',content:[
-        {type:'image',source:{type:'base64',media_type:mime,data:b64}},
-        {type:'text',text:`この食事の写真を分析し、以下のJSONのみ返してください（説明不要）:
-{"name":"料理名","calories":整数,"protein":整数,"fat":整数,"carbs":整数,"description":"20文字以内の説明"}`}
-      ]}]
+      contents:[{parts:[
+        {inline_data:{mime_type:mime,data:b64}},
+        {text:`この食事の写真を分析し、以下のJSONのみ返してください（説明不要）:\n{"name":"料理名","calories":整数,"protein":整数,"fat":整数,"carbs":整数,"description":"20文字以内の説明"}`}
+      ]}],
+      generationConfig:{maxOutputTokens:512}
     })
   });
   if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error?.message||`HTTP ${res.status}`); }
   const d=await res.json();
-  const txt=d.content[0].text.trim();
+  const txt=d.candidates[0].content.parts[0].text.trim();
   const m=txt.match(/\{[\s\S]*\}/); if(!m) throw new Error('解析結果を取得できませんでした');
   const r=JSON.parse(m[0]);
   r.calories=parseInt(r.calories)||0; r.protein=parseInt(r.protein)||0;
@@ -738,7 +729,7 @@ async function claudeVision(b64, mime) {
   return r;
 }
 
-async function claudeAdvice() {
+async function geminiAdvice() {
   const meals=todayMeals();
   const goal=getGoal();
   const cal=meals.reduce((s,m)=>s+m.calories,0);
@@ -760,12 +751,13 @@ ${wts.length?wts.map(w=>`${w.date}:${w.weight}kg`).join('、'):'データなし'
 
 150〜200文字の日本語で具体的に。`;
 
-  const res=await fetch('https://api.anthropic.com/v1/messages',{
-    method:'POST', headers:apiHeaders(),
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:512,messages:[{role:'user',content:prompt}]})
+  const key=getStr(K.api);
+  const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:512}})
   });
   if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error?.message||`HTTP ${res.status}`); }
-  return (await res.json()).content[0].text.trim();
+  return (await res.json()).candidates[0].content.parts[0].text.trim();
 }
 
 // ── Boot ──
